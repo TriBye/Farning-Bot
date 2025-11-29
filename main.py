@@ -229,8 +229,9 @@ class RegisterModal(discord.ui.Modal):
             f"Wochentag: {self.wochentag.value}\n"
             f"Zeit: {self.zeit.value}"
         )
+        view = RegistrationLogView(requester=interaction.user, log_channel=self.log_channel)
         try:
-            await self.log_channel.send(content)
+            await self.log_channel.send(content, view=view)
             await interaction.response.send_message("Danke! Deine Angaben wurden gespeichert.", ephemeral=True)
         except (discord.HTTPException, discord.Forbidden) as exc:
             logger.exception("Kurs-Registrierung konnte nicht geloggt werden: %s", exc)
@@ -238,6 +239,99 @@ class RegisterModal(discord.ui.Modal):
                 "Fehler beim Speichern deiner Angaben. Bitte versuche es spaeter erneut.",
                 ephemeral=True,
             )
+
+
+class AcceptRegistrationModal(discord.ui.Modal):
+    def __init__(
+        self,
+        requester: discord.abc.User,
+        log_channel: discord.TextChannel,
+        log_message: discord.Message,
+    ) -> None:
+        super().__init__(title="Registrierung annehmen")
+        self.requester = requester
+        self.log_channel = log_channel
+        self.log_message = log_message
+        self.kurs: discord.ui.TextInput[str] = discord.ui.TextInput(
+            label="Kurs",
+            placeholder="Kursname oder Kanal",
+            required=True,
+        )
+        self.add_item(self.kurs)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:  # noqa: D401
+        """Loggt die Annahme und entfernt den Originaleintrag."""
+        kurs_value = self.kurs.value.strip()
+        if not kurs_value:
+            await interaction.response.send_message("Bitte gib einen Kurs an.", ephemeral=True)
+            return
+
+        log_text = (
+            f"{self.requester.mention} wurde von {interaction.user.mention} "
+            f"dem Kurs/Kanal **{kurs_value}** hinzugefuegt."
+        )
+        log_failed = False
+        try:
+            await self.log_channel.send(log_text)
+        except (discord.HTTPException, discord.Forbidden) as exc:
+            logger.exception("Annahme konnte nicht im Kurs-Log vermerkt werden: %s", exc)
+            log_failed = True
+
+        try:
+            await self.log_message.delete()
+        except discord.HTTPException as exc:
+            logger.warning("Originales Registrierungslog konnte nicht geloescht werden: %s", exc)
+
+        if log_failed:
+            await interaction.response.send_message(
+                "Die Annahme konnte nicht geloggt werden, der Eintrag wurde entfernt.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message("Registrierung angenommen.", ephemeral=True)
+
+
+class RegistrationLogView(discord.ui.View):
+    def __init__(self, requester: discord.abc.User, log_channel: discord.TextChannel) -> None:
+        super().__init__(timeout=None)
+        self.requester = requester
+        self.log_channel = log_channel
+
+    @discord.ui.button(label="Akzeptieren", style=discord.ButtonStyle.success, custom_id="kurslog_accept")
+    async def accept(  # type: ignore[override]
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # noqa: ARG002
+    ) -> None:
+        if not interaction.message:
+            await interaction.response.send_message("Kein Logeintrag gefunden.", ephemeral=True)
+            return
+        modal = AcceptRegistrationModal(
+            requester=self.requester,
+            log_channel=self.log_channel,
+            log_message=interaction.message,
+        )
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Ablehnen", style=discord.ButtonStyle.danger, custom_id="kurslog_decline")
+    async def decline(  # type: ignore[override]
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # noqa: ARG002
+    ) -> None:
+        if not interaction.message:
+            await interaction.response.send_message("Kein Logeintrag gefunden.", ephemeral=True)
+            return
+        try:
+            await interaction.message.delete()
+        except (discord.HTTPException, discord.Forbidden) as exc:
+            logger.exception("Registrierungslog konnte nicht geloescht werden: %s", exc)
+            await interaction.response.send_message(
+                "Der Logeintrag konnte nicht entfernt werden.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message("Registrierung abgelehnt und entfernt.", ephemeral=True)
 
 
 @bot.event
