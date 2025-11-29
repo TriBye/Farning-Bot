@@ -197,9 +197,67 @@ async def _get_course_category(guild: discord.Guild) -> discord.CategoryChannel:
     return category
 
 
+def _get_kurs_logs_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
+    """Suche nach dem kurs-logs Kanal (case-insensitiv)."""
+    return discord.utils.find(
+        lambda ch: isinstance(ch, discord.TextChannel) and ch.name.casefold() == "kurs-logs",
+        guild.text_channels,
+    )
+
+
+class RegisterModal(discord.ui.Modal):
+    def __init__(self, log_channel: discord.TextChannel) -> None:
+        super().__init__(title="Kurs registrieren")
+        self.log_channel = log_channel
+        self.wochentag: discord.ui.TextInput[str] = discord.ui.TextInput(
+            label="Wochentag",
+            placeholder="Gebe den Wochentag deines Kurses an",
+            required=True,
+        )
+        self.zeit: discord.ui.TextInput[str] = discord.ui.TextInput(
+            label="Zeit",
+            placeholder="Gebe die Zeit deines Kurses an",
+            required=True,
+        )
+        self.add_item(self.wochentag)
+        self.add_item(self.zeit)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:  # noqa: D401
+        """Loggt die Eingaben in #kurs-logs."""
+        content = (
+            f"Neue Kurs-Registrierung von {interaction.user.mention} ({interaction.user.id})\n"
+            f"Wochentag: {self.wochentag.value}\n"
+            f"Zeit: {self.zeit.value}"
+        )
+        try:
+            await self.log_channel.send(content)
+            await interaction.response.send_message("Danke! Deine Angaben wurden gespeichert.", ephemeral=True)
+        except (discord.HTTPException, discord.Forbidden) as exc:
+            logger.exception("Kurs-Registrierung konnte nicht geloggt werden: %s", exc)
+            await interaction.response.send_message(
+                "Fehler beim Speichern deiner Angaben. Bitte versuche es spaeter erneut.",
+                ephemeral=True,
+            )
+
+
 @bot.event
 async def on_ready() -> None:
     logger.info("Bot eingeloggt als %s (ID %s)", bot.user, bot.user.id if bot.user else "?")
+
+
+@bot.tree.command(name="register", description="Registriert Kursdaten im Kurs-Log.")
+async def register(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("Bitte benutze diesen Befehl auf dem Server.", ephemeral=True)
+        return
+
+    log_channel = _get_kurs_logs_channel(guild)
+    if not log_channel:
+        await interaction.response.send_message("Kanal #kurs-logs wurde nicht gefunden.", ephemeral=True)
+        return
+
+    await interaction.response.send_modal(RegisterModal(log_channel))
 
 
 @bot.tree.command(name="timeout", description="Setzt ein Mitglied fuer eine Zeitspanne auf Timeout.")
